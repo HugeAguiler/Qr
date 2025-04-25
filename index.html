@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Escáner QR Hugo 2025</title>
+  <script src="https://unpkg.com/html5-qrcode"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+      background-color: #f9f9f9;
+      padding: 20px;
+    }
+    #reader {
+      width: 400px;
+      margin: auto;
+    }
+    #result {
+      margin-top: 20px;
+      background: #e0ffe3;
+      padding: 10px;
+      border-radius: 10px;
+      font-size: 1.2em;
+      color: #0a6d5a;
+    }
+    #retry-btn, #camera-select {
+      display: none;
+      margin-top: 20px;
+      padding: 10px 20px;
+      font-size: 1em;
+      border: none;
+      border-radius: 5px;
+    }
+    #retry-btn {
+      background-color: #0a6d5a;
+      color: white;
+      cursor: pointer;
+    }
+    #camera-select {
+      background-color: #f0f0f0;
+    }
+  </style>
+</head>
+<body>
+  <h2>📷 Escáner de Código QR</h2>
+  <p>Apunta la cámara al QR para escanear y registrar automáticamente.</p>
+  <select id="camera-select"></select>
+  <div id="reader"></div>
+  <div id="result">Esperando escaneo...</div>
+  <button id="retry-btn" onclick="location.reload()">🔄 Reintentar escaneo</button>
+
+  <script>
+    const html5QrCode = new Html5Qrcode("reader");
+    let alreadyScanned = false;
+    const cameraSelect = document.getElementById("camera-select");
+
+    function startScanner(cameraId) {
+      html5QrCode.start(
+        cameraId,
+        { fps: 10, qrbox: 250 },
+        qrCodeMessage => {
+          if (alreadyScanned) return;
+          alreadyScanned = true;
+
+          document.getElementById("result").innerText = `✅ Detectado: ${qrCodeMessage}`;
+          console.log("Código escaneado:", qrCodeMessage);
+
+          // Validar que el código escaneado sea una URL válida antes de redirigir
+          const destino = `http://localhost:8501/?codigo=${encodeURIComponent(qrCodeMessage)}`;
+          const a = document.createElement("a");
+          a.href = destino;
+
+          // Intentar redirigir de forma confiable
+          html5QrCode.stop().then(() => {
+            document.body.appendChild(a);
+            a.click();
+          }).catch(err => {
+            console.error("❌ Error al detener cámara:", err);
+            document.body.appendChild(a);
+            a.click();
+          });
+        },
+        errorMessage => {
+          console.warn("Error escaneando:", errorMessage);
+        }
+      ).catch(err => {
+        alert("❌ No se pudo iniciar el escáner de cámara. Verifica los permisos o intenta con otro navegador.");
+        console.error("Error al iniciar escáner:", err);
+        document.getElementById("retry-btn").style.display = "inline-block";
+      });
+    }
+
+    navigator.mediaDevices.getUserMedia({ video: true })
+      .then(function(stream) {
+        Html5Qrcode.getCameras().then(cameras => {
+          if (cameras.length === 0) {
+            alert("⚠️ No se detectaron cámaras.");
+            document.getElementById("retry-btn").style.display = "inline-block";
+            return;
+          }
+
+          cameraSelect.style.display = "inline-block";
+          cameraSelect.innerHTML = cameras.map(
+            cam => `<option value="${cam.id}">${cam.label}</option>`
+          ).join("");
+
+          cameraSelect.onchange = () => {
+            html5QrCode.stop().then(() => {
+              startScanner(cameraSelect.value);
+            }).catch(err => {
+              console.error("Error al cambiar de cámara:", err);
+            });
+          };
+
+          startScanner(cameras[0].id);
+
+        }).catch(err => {
+          alert("❌ No se pudieron obtener las cámaras. Revisa si otra aplicación está usándola o verifica los permisos del navegador.");
+          console.error("Error detectando cámaras:", err);
+          document.getElementById("retry-btn").style.display = "inline-block";
+        });
+      })
+      .catch(function(err) {
+        alert("❌ Acceso a cámara denegado. Por favor verifica los permisos del navegador o sistema.\n\nDetalles: " + err);
+        console.error("Error de permisos:", err);
+        document.getElementById("retry-btn").style.display = "inline-block";
+      });
+  </script>
+</body>
+</html>
+
+
+
+
+
+
+
+
