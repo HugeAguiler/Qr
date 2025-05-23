@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+from google.oauth2.service_account import Credentials
 from datetime import datetime
 from gtts import gTTS
 import openai
@@ -11,22 +11,25 @@ import os
 st.set_page_config(page_title="Sentinela QR", layout="wide")
 st.title("🚚 Sentinela QR - Trazabilidad Inteligente 2025")
 
-# --- API Keys ---
+# --- API Keys (opcional si usas OpenAI) ---
 openai.api_key = os.environ.get("OPENAI_API_KEY")
 
-# --- CONEXIÓN A GOOGLE SHEETS LOCAL ---
+# --- PARÁMETROS ---
+sheet_id = "1yWJoHTzHRwxCPQCnthm2MCgD2DFO--fQEgqMq0_fbCM"
+sheet_name = "DatosQR"
+json_path = "registro-eventos-hugo-a97cbe9d7f0f.json"  # Debe estar en la misma carpeta
+
+# --- CONEXIÓN SOLO USANDO ARCHIVO JSON ---
 @st.cache_resource
-def conectar_google_sheet(json_path, sheet_id, sheet_name):
-    dir_path = os.path.dirname(__file__)
-    full_path = os.path.join(dir_path, json_path)
-    if not os.path.exists(full_path):
-        return None, f"❌ Archivo JSON no encontrado: {full_path}"
+def conectar_google_sheet(sheet_id, sheet_name):
+    scope = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive"
+    ]
     try:
-        scope = [
-            "https://spreadsheets.google.com/feeds",
-            "https://www.googleapis.com/auth/drive"
-        ]
-        creds = ServiceAccountCredentials.from_json_keyfile_name(full_path, scope)
+        cred_path = os.path.join(os.getcwd(), json_path)
+        st.write(f"[DEBUG] Usando JSON local: {cred_path}")
+        creds = Credentials.from_service_account_file(cred_path, scopes=scope)
         client = gspread.authorize(creds)
         spreadsheet = client.open_by_key(sheet_id)
         worksheet = spreadsheet.worksheet(sheet_name)
@@ -34,11 +37,12 @@ def conectar_google_sheet(json_path, sheet_id, sheet_name):
     except gspread.exceptions.SpreadsheetNotFound:
         return None, f"❌ Hoja con ID {sheet_id} no encontrada. Verifica el ID."
     except Exception as e:
-        return None, f"❌ Error al conectar con Google Sheets: {e}"
+        return None, f"❌ Error al conectar con Hojas de cálculo de Google: {e}"
 
 # --- FUNCIONES AUXILIARES ---
 def registrar_evento(sheet, data):
     try:
+        data = [str(x) for x in data]
         sheet.append_row(data)
         st.success("✅ Evento registrado correctamente.")
     except Exception as e:
@@ -47,18 +51,23 @@ def registrar_evento(sheet, data):
 def cargar_eventos(sheet):
     try:
         records = sheet.get_all_records()
-        return pd.DataFrame(records)
+        df = pd.DataFrame(records)
+        for col in df.columns:
+            df[col] = df[col].astype(str)
+        return df
     except Exception as e:
         st.error(f"❌ Error al cargar eventos: {e}")
         return pd.DataFrame()
 
 def sugerir_siguiente_paso(codigo_qr, eventos):
     try:
-        prompt = f"Tengo un historial de eventos para el código QR '{codigo_qr}': {eventos}. ¿Cuál sería el siguiente paso lógico en un proceso logístico?"
+        if not openai.api_key:
+            return "🔐 No se puede generar sugerencia: falta la API Key."
+        prompt = f"Historial de eventos para el código QR '{codigo_qr}': {eventos}. ¿Cuál es el siguiente paso lógico en logística?"
         response = openai.ChatCompletion.create(
             model="gpt-4",
             messages=[
-                {"role": "system", "content": "Eres un experto en procesos logísticos y trazabilidad."},
+                {"role": "system", "content": "Eres experto en procesos logísticos."},
                 {"role": "user", "content": prompt}
             ]
         )
@@ -77,13 +86,8 @@ def reproducir_audio(texto):
     except Exception as e:
         st.error(f"❌ Error al generar audio: {e}")
 
-# --- PARÁMETROS ---
-json_path = "registro-eventos-hugo-bf4035e53377.json"
-sheet_id = "1yWJoHTzHRwxCPQCnthm2MCgD2DFO--fQEgqMq0_fbCM"
-sheet_name = "DatosQR"
-
 # --- CONECTAR ---
-sheet, connection_message = conectar_google_sheet(json_path, sheet_id, sheet_name)
+sheet, connection_message = conectar_google_sheet(sheet_id, sheet_name)
 if sheet is None:
     st.error(connection_message)
     st.stop()
@@ -115,58 +119,45 @@ with tab1:
 
     with st.expander("📄 Ver últimos eventos"):
         df_eventos = cargar_eventos(sheet)
-        if not df_eventos.empty:
-            st.dataframe(df_eventos)
-        else:
-            st.warning("⚠️ No se encontraron eventos.")
+        st.dataframe(df_eventos)
 
 # --- TAB 2: VISOR + IA ---
 with tab2:
     st.header("Visor de QR y Sugerencia Inteligente")
     df = cargar_eventos(sheet)
 
-    # Leer código desde la URL
-    codigo_url = st.query_params.get("codigo")
+    codigo_url = st.query_params.get("codigo") if hasattr(st, 'query_params') else None
     if codigo_url:
         st.success(f"📦 Código recibido automáticamente: {codigo_url}")
-        # Registrar automáticamente el QR escaneado
         fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         data = [codigo_url, fecha, "Escaneado", "Lugar Desconocido", "Posición Desconocida", 1, "Usuario Desconocido"]
         registrar_evento(sheet, data)
 
-    if not df.empty:
-        st.subheader("📊 Vista previa de datos")
-        st.dataframe(df)
+    if not df.empty and "Codigo QR" in df.columns:
+        seleccionado = st.selectbox("Selecciona un QR", df["Codigo QR"].unique())
+        df_qr = df[df["Codigo QR"] == seleccionado]
+        st.subheader("📌 Historial del Código QR")
+        st.dataframe(df_qr)
 
-        if "Codigo QR" in df.columns:
-            codigos = df["Codigo QR"].dropna().unique()
+        eventos = df_qr["Evento"].tolist()
+        sugerencia = sugerir_siguiente_paso(seleccionado, eventos)
 
-            # Si tenemos el código en la URL, seleccionarlo automáticamente en el selectbox
-            seleccionado = st.selectbox(
-                "Selecciona un QR",
-                codigos,
-                index=0 if not codigo_url or codigo_url not in codigos else list(codigos).index(codigo_url)
-            )
+        st.subheader("🔮 Sugerencia del próximo paso")
+        st.write(sugerencia)
 
-            # Filtrar el DataFrame según el código seleccionado
-            df_qr = df[df["Codigo QR"] == seleccionado].sort_values(by="Fecha Hora")
-            st.subheader("📌 Historial del Código QR")
-            cols = ["Fecha Hora", "Evento", "Ubicacion", "Usuario"]
-            disponibles = [col for col in cols if col in df_qr.columns]
-            st.dataframe(df_qr[disponibles])
-
-            eventos = df_qr["Evento"].tolist()
-            sugerencia = sugerir_siguiente_paso(seleccionado, eventos)
-
-            st.subheader("🔮 Sugerencia del próximo paso")
-            st.write(sugerencia)
-
-            if st.button("🔊 Escuchar sugerencia"):
-                reproducir_audio(sugerencia)
-        else:
-            st.warning("⚠️ No se encontró la columna 'Codigo QR'. Verifica tu hoja.")
+        if st.button("🔊 Escuchar sugerencia"):
+            reproducir_audio(sugerencia)
     else:
-        st.error("❌ No se pudieron cargar los datos.")
+        st.warning("⚠️ Datos insuficientes para mostrar historial y sugerencias.")
+
+
+
+
+
+
+
+
+
 
 
 
